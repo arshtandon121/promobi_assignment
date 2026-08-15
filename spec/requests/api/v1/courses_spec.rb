@@ -54,6 +54,75 @@ RSpec.describe "Api::V1::Courses", type: :request do
     end
   end
 
+  describe "POST /api/v1/courses with invalid data" do
+    it "rejects a course without a name" do
+      expect {
+        post "/api/v1/courses", params: { course: { description: "No name given" } }, as: :json
+      }.not_to change(Course, :count)
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["errors"]).to include("Name can't be blank")
+    end
+
+    it "rejects the whole request when one tutor is invalid" do
+      payload = {
+        course: {
+          name: "Ruby on Rails Fundamentals",
+          tutors_attributes: [
+            { name: "Arshdeep", email: "arshdeep@example.com" },
+            { name: "Neha", email: "not-an-email" }
+          ]
+        }
+      }
+
+      post "/api/v1/courses", params: payload, as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["errors"].join).to match(/email/i)
+    end
+
+    it "leaves no orphaned course behind when a tutor is invalid" do
+      payload = {
+        course: {
+          name: "Ruby on Rails Fundamentals",
+          tutors_attributes: [
+            { name: "Arshdeep", email: "arshdeep@example.com" },
+            { name: "Neha", email: "not-an-email" }
+          ]
+        }
+      }
+
+      expect {
+        post "/api/v1/courses", params: payload, as: :json
+      }.not_to change(Course, :count)
+
+      expect(Course.count).to be_zero
+      expect(Tutor.count).to be_zero
+    end
+
+    it "rejects a tutor whose email is already taken" do
+      create(:tutor, email: "arshdeep@example.com")
+
+      payload = {
+        course: {
+          name: "Another Course",
+          tutors_attributes: [ { name: "Arshdeep", email: "ARSHDEEP@example.com" } ]
+        }
+      }
+
+      post "/api/v1/courses", params: payload, as: :json
+
+      expect(response).to have_http_status(:unprocessable_content)
+      expect(response.parsed_body["errors"]).to include("Tutors email has already been taken")
+    end
+
+    it "rejects a request with an empty course payload" do
+      post "/api/v1/courses", params: { course: {} }, as: :json
+
+      expect(response).to have_http_status(:bad_request)
+    end
+  end
+
   describe "GET /api/v1/courses" do
     it "returns every course along with its tutors" do
       rails_course = create(:course, name: "Rails")
