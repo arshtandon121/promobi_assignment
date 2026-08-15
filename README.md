@@ -1,18 +1,11 @@
 # Course & Tutor API
 
-A small Rails API-only application that exposes two endpoints:
+A small Rails API-only app with two endpoints: one to create a course along with its
+tutors, and one to list all courses with their tutors.
 
-1. A single `POST` endpoint that creates a course together with its tutors.
-2. A `GET` endpoint that lists every course along with its tutors.
-
-## Domain
-
-- A course has many tutors.
-- A tutor teaches exactly one course.
-
-The "one course per tutor" rule is enforced structurally: a tutor row holds a single
-`course_id` with a foreign key and a `NOT NULL` constraint. Tutor emails carry a unique
-index as well, so the same person cannot be registered under two different courses.
+A course has many tutors, and a tutor teaches one course only. The schema enforces that:
+`tutors.course_id` is `NOT NULL` with a foreign key, and `tutors.email` has a unique
+index, so the same person can't be added under two courses.
 
 ## Requirements
 
@@ -28,11 +21,13 @@ bin/rails db:prepare
 bin/rails server
 ```
 
-The API is then available at `http://localhost:3000`.
+The API runs on `http://localhost:3000`.
 
 ## Endpoints
 
-### Create a course and its tutors
+### POST /api/v1/courses
+
+Creates a course and its tutors in one request.
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/courses \
@@ -63,9 +58,11 @@ curl -X POST http://localhost:3000/api/v1/courses \
 }
 ```
 
-`tutors_attributes` is optional, so a course can also be created on its own.
+`tutors_attributes` is optional, so a course can be created on its own.
 
-### List all courses with their tutors
+### GET /api/v1/courses
+
+Lists all courses with their tutors.
 
 ```bash
 curl http://localhost:3000/api/v1/courses
@@ -87,16 +84,32 @@ curl http://localhost:3000/api/v1/courses
 ]
 ```
 
-### Validation failures
+The list is paginated with `page` and `per_page`. It defaults to 25 per page and caps
+`per_page` at 100. Missing or invalid values fall back to the defaults.
 
-If the course or any of its tutors is invalid, nothing is written and the endpoint
-responds with `422 Unprocessable Content`:
+```bash
+curl -i "http://localhost:3000/api/v1/courses?page=2&per_page=3"
+```
+
+The body is still a plain array. The counts come back in headers:
+
+```
+X-Total-Count: 7
+X-Page: 2
+X-Per-Page: 3
+X-Total-Pages: 3
+```
+
+### Errors
+
+Both endpoints return errors in the same shape:
 
 ```json
 { "errors": ["Tutors email is invalid", "Name can't be blank"] }
 ```
 
-A request whose `course` payload is empty responds with `400 Bad Request`.
+`422` if the course or any of its tutors is invalid, in which case nothing is saved.
+`400` if the `course` key is missing or empty.
 
 ## Tests
 
@@ -104,41 +117,34 @@ A request whose `course` payload is empty responds with `400 Bad Request`.
 bundle exec rspec
 ```
 
-25 examples covering the models (associations, validations, nested creation) and both
-endpoints, including the success responses, the exact serialized fields, validation
-failures, and a case asserting that an invalid tutor leaves no orphaned course behind.
+32 examples covering the models and both endpoints: the success responses, the exact
+fields returned, pagination edges, validation failures, and a check that a failed create
+leaves no course behind.
 
-## Design notes
+## Notes on a few choices
 
-**Creating a course and its tutors in one request.** `Course` uses
-`accepts_nested_attributes_for :tutors`, so `course.save` writes the parent and its
-children inside a single transaction and reports child validation errors on the parent.
-That is why a bad tutor rolls the entire request back, which the specs assert directly.
+I used `accepts_nested_attributes_for :tutors` instead of a `Courses::Create` service
+object. It already saves the course and its tutors in one transaction and reports the
+tutor errors on the course, so a service would only wrap `Course.new(params).save` in
+another layer. It would be worth extracting once creation grows logic that doesn't belong
+in the model, like emailing tutors or syncing to another system.
 
-**No service object.** With nested attributes doing the transactional work, a
-`Courses::Create` service would only wrap `Course.new(params).save` in another layer.
-The extraction becomes worthwhile once creation grows behaviour that does not belong to
-the model, for example notifying tutors, syncing to an external system, or branching on
-the type of course being created. At the current scope it would be indirection without
-purpose.
+No Sidekiq either. The endpoint has to return the created records with their IDs, so it
+can't reply before the write happens, and the write is two inserts in one transaction.
+Background jobs fit the side effects around creation rather than the creation itself.
 
-**No background job.** The endpoint has to return the created course and its tutor IDs,
-which rules out responding before the write happens. The write itself is two inserts in
-one transaction. Sidekiq would fit the side effects around creation, such as emailing the
-tutors, rather than the creation itself.
+Responses go through ActiveModel::Serializers so the controller doesn't build JSON by hand
+and columns like timestamps aren't exposed by accident. Moving to the JSON:API adapter is
+a config change if a client needs that format.
 
-**Serialization.** Responses are rendered with ActiveModel::Serializers, which keeps the
-controller free of response shaping and makes the exposed fields explicit, so internal
-columns such as timestamps are never leaked by accident. The default attributes adapter
-produces the nested shape shown above; switching to the JSON:API adapter is a one-line
-configuration change if a client needs that format.
+The list endpoint uses `includes(:tutors)` to avoid an N+1, and pagination keeps the
+payload bounded, since a constant query count still returns every row otherwise. The
+totals go in headers instead of a `data`/`meta` envelope so the response stays the array
+it already was. I wrote it by hand because limit and offset over an ordered scope is a few
+lines, and Kaminari or Pagy mostly add view helpers an API doesn't need.
 
-**Queries.** The list endpoint uses `Course.includes(:tutors)` so the number of queries
-stays constant as the number of courses grows, instead of issuing one query per course.
+Strong params use `params.expect`, and `ApplicationController` rescues `ParameterMissing`
+so a malformed payload gets a JSON `400` instead of an HTML error page.
 
-**Input handling.** Parameters are filtered with `params.expect`, the Rails 8 strong
-parameters idiom, which permits exactly the course and tutor fields the API documents and
-returns `400` rather than `500` when the payload is malformed.
-
-**Emails.** Tutor emails are normalised to lowercase before validation, which keeps the
-unique index meaningful no matter how the address was typed.
+Tutor emails are stripped and downcased before validation, which keeps the unique index
+meaningful however the address was typed.

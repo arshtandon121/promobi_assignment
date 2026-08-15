@@ -157,6 +157,76 @@ RSpec.describe "Api::V1::Courses", type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(response.parsed_body).to eq([])
+      expect(response.headers["X-Total-Count"]).to eq("0")
+      expect(response.headers["X-Total-Pages"]).to eq("1")
+    end
+  end
+
+  describe "GET /api/v1/courses pagination" do
+    it "returns the first page and reports the totals in headers" do
+      create_list(:course, 30)
+
+      get "/api/v1/courses"
+
+      expect(response.parsed_body.size).to eq(25)
+      expect(response.headers["X-Total-Count"]).to eq("30")
+      expect(response.headers["X-Page"]).to eq("1")
+      expect(response.headers["X-Per-Page"]).to eq("25")
+      expect(response.headers["X-Total-Pages"]).to eq("2")
+    end
+
+    it "keeps the body a bare array so the response shape is unchanged" do
+      create_list(:course, 3)
+
+      get "/api/v1/courses", params: { per_page: 2 }
+
+      expect(response.parsed_body).to be_an(Array)
+      expect(response.parsed_body.first.keys).to contain_exactly("id", "name", "description", "tutors")
+    end
+
+    it "walks through the pages without repeating or dropping a course" do
+      create_list(:course, 5)
+
+      get "/api/v1/courses", params: { per_page: 2 }
+      first_page = response.parsed_body.map { |course| course["id"] }
+
+      get "/api/v1/courses", params: { per_page: 2, page: 2 }
+      second_page = response.parsed_body.map { |course| course["id"] }
+
+      get "/api/v1/courses", params: { per_page: 2, page: 3 }
+      third_page = response.parsed_body.map { |course| course["id"] }
+
+      expect(first_page.size).to eq(2)
+      expect(second_page.size).to eq(2)
+      expect(third_page.size).to eq(1)
+      expect(first_page + second_page + third_page).to eq(Course.order(:id).pluck(:id))
+    end
+
+    it "returns an empty page past the end of the collection" do
+      create_list(:course, 2)
+
+      get "/api/v1/courses", params: { page: 99 }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.parsed_body).to eq([])
+      expect(response.headers["X-Total-Count"]).to eq("2")
+    end
+
+    it "caps per_page so a client cannot ask for the whole table" do
+      get "/api/v1/courses", params: { per_page: 5_000 }
+
+      expect(response.headers["X-Per-Page"]).to eq(Paginated::MAX_PER_PAGE.to_s)
+    end
+
+    it "falls back to the defaults when the parameters are junk" do
+      create_list(:course, 3)
+
+      get "/api/v1/courses", params: { page: "-4", per_page: "abc" }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.headers["X-Page"]).to eq("1")
+      expect(response.headers["X-Per-Page"]).to eq(Paginated::DEFAULT_PER_PAGE.to_s)
+      expect(response.parsed_body.size).to eq(3)
     end
   end
 end

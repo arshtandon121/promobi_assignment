@@ -1,8 +1,10 @@
 module Api
   module V1
     class CoursesController < ApplicationController
+      include Paginated
+
       def index
-        courses = Course.includes(:tutors).order(:id)
+        courses = paginate(Course.includes(:tutors).order(:id))
 
         render json: courses, status: :ok
       end
