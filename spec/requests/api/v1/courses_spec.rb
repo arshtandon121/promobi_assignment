@@ -120,6 +120,15 @@ RSpec.describe "Api::V1::Courses", type: :request do
       post "/api/v1/courses", params: { course: {} }, as: :json
 
       expect(response).to have_http_status(:bad_request)
+      expect(response.parsed_body["errors"]).to be_present
+    end
+
+    it "describes bad requests with the same error shape as validation failures" do
+      post "/api/v1/courses", params: { course: {} }, as: :json
+
+      expect(response.media_type).to eq("application/json")
+      expect(response.parsed_body.keys).to contain_exactly("errors")
+      expect(response.parsed_body["errors"]).to all(be_a(String))
     end
   end
 
