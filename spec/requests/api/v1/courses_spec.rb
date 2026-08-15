@@ -142,13 +142,13 @@ RSpec.describe "Api::V1::Courses", type: :request do
 
       expect(response).to have_http_status(:ok)
 
-      body = response.parsed_body
-      expect(body.map { |course| course["name"] }).to contain_exactly("Rails", "Postgres")
+      courses = response.parsed_body["courses"]
+      expect(courses.map { |course| course["name"] }).to contain_exactly("Rails", "Postgres")
 
-      serialized_rails = body.find { |course| course["name"] == "Rails" }
+      serialized_rails = courses.find { |course| course["name"] == "Rails" }
       expect(serialized_rails["tutors"].map { |tutor| tutor["name"] }).to eq([ "Arshdeep" ])
 
-      serialized_postgres = body.find { |course| course["name"] == "Postgres" }
+      serialized_postgres = courses.find { |course| course["name"] == "Postgres" }
       expect(serialized_postgres["tutors"]).to eq([])
     end
 
@@ -156,50 +156,61 @@ RSpec.describe "Api::V1::Courses", type: :request do
       get "/api/v1/courses"
 
       expect(response).to have_http_status(:ok)
-      expect(response.parsed_body).to eq([])
-      expect(response.headers["X-Total-Count"]).to eq("0")
-      expect(response.headers["X-Total-Pages"]).to eq("1")
+      expect(response.parsed_body["courses"]).to eq([])
+      expect(response.parsed_body["meta"]).to include("total_count" => 0, "total_pages" => 1)
+    end
+
+    it "exposes only the documented fields" do
+      create(:course, :with_tutors, tutors_count: 1)
+
+      get "/api/v1/courses"
+
+      body = response.parsed_body
+
+      expect(body.keys).to contain_exactly("courses", "meta")
+      expect(body["courses"].first.keys).to contain_exactly("id", "name", "description", "tutors")
+      expect(body["meta"].keys).to contain_exactly("page", "per_page", "total_count", "total_pages")
     end
   end
 
   describe "GET /api/v1/courses pagination" do
-    it "returns the first page and reports the totals in headers" do
+    it "returns the first page and reports the totals in the body" do
       create_list(:course, 30)
 
       get "/api/v1/courses"
 
-      expect(response.parsed_body.size).to eq(25)
-      expect(response.headers["X-Total-Count"]).to eq("30")
-      expect(response.headers["X-Page"]).to eq("1")
-      expect(response.headers["X-Per-Page"]).to eq("25")
-      expect(response.headers["X-Total-Pages"]).to eq("2")
-    end
-
-    it "keeps the body a bare array so the response shape is unchanged" do
-      create_list(:course, 3)
-
-      get "/api/v1/courses", params: { per_page: 2 }
-
-      expect(response.parsed_body).to be_an(Array)
-      expect(response.parsed_body.first.keys).to contain_exactly("id", "name", "description", "tutors")
+      expect(response.parsed_body["courses"].size).to eq(25)
+      expect(response.parsed_body["meta"]).to eq(
+        "page" => 1, "per_page" => 25, "total_count" => 30, "total_pages" => 2
+      )
     end
 
     it "walks through the pages without repeating or dropping a course" do
       create_list(:course, 5)
 
       get "/api/v1/courses", params: { per_page: 2 }
-      first_page = response.parsed_body.map { |course| course["id"] }
+      first_page = response.parsed_body["courses"].map { |course| course["id"] }
 
       get "/api/v1/courses", params: { per_page: 2, page: 2 }
-      second_page = response.parsed_body.map { |course| course["id"] }
+      second_page = response.parsed_body["courses"].map { |course| course["id"] }
 
       get "/api/v1/courses", params: { per_page: 2, page: 3 }
-      third_page = response.parsed_body.map { |course| course["id"] }
+      third_page = response.parsed_body["courses"].map { |course| course["id"] }
 
       expect(first_page.size).to eq(2)
       expect(second_page.size).to eq(2)
       expect(third_page.size).to eq(1)
       expect(first_page + second_page + third_page).to eq(Course.order(:id).pluck(:id))
+    end
+
+    it "reports the same totals on every page" do
+      create_list(:course, 5)
+
+      get "/api/v1/courses", params: { per_page: 2, page: 2 }
+
+      expect(response.parsed_body["meta"]).to eq(
+        "page" => 2, "per_page" => 2, "total_count" => 5, "total_pages" => 3
+      )
     end
 
     it "returns an empty page past the end of the collection" do
@@ -208,14 +219,14 @@ RSpec.describe "Api::V1::Courses", type: :request do
       get "/api/v1/courses", params: { page: 99 }
 
       expect(response).to have_http_status(:ok)
-      expect(response.parsed_body).to eq([])
-      expect(response.headers["X-Total-Count"]).to eq("2")
+      expect(response.parsed_body["courses"]).to eq([])
+      expect(response.parsed_body["meta"]).to include("total_count" => 2)
     end
 
     it "caps per_page so a client cannot ask for the whole table" do
       get "/api/v1/courses", params: { per_page: 5_000 }
 
-      expect(response.headers["X-Per-Page"]).to eq(Paginated::MAX_PER_PAGE.to_s)
+      expect(response.parsed_body["meta"]["per_page"]).to eq(Paginated::MAX_PER_PAGE)
     end
 
     it "falls back to the defaults when the parameters are junk" do
@@ -224,9 +235,10 @@ RSpec.describe "Api::V1::Courses", type: :request do
       get "/api/v1/courses", params: { page: "-4", per_page: "abc" }
 
       expect(response).to have_http_status(:ok)
-      expect(response.headers["X-Page"]).to eq("1")
-      expect(response.headers["X-Per-Page"]).to eq(Paginated::DEFAULT_PER_PAGE.to_s)
-      expect(response.parsed_body.size).to eq(3)
+      expect(response.parsed_body["meta"]).to include(
+        "page" => 1, "per_page" => Paginated::DEFAULT_PER_PAGE
+      )
+      expect(response.parsed_body["courses"].size).to eq(3)
     end
   end
 end

@@ -71,33 +71,33 @@ curl http://localhost:3000/api/v1/courses
 `200 OK`
 
 ```json
-[
-  {
-    "id": 1,
-    "name": "Ruby on Rails Fundamentals",
-    "description": "Build and ship web applications with Rails",
-    "tutors": [
-      { "id": 1, "name": "Arshdeep Tandon", "email": "arshdeep@example.com" },
-      { "id": 2, "name": "Neha Sharma", "email": "neha@example.com" }
-    ]
+{
+  "courses": [
+    {
+      "id": 1,
+      "name": "Ruby on Rails Fundamentals",
+      "description": "Build and ship web applications with Rails",
+      "tutors": [
+        { "id": 1, "name": "Arshdeep Tandon", "email": "arshdeep@example.com" },
+        { "id": 2, "name": "Neha Sharma", "email": "neha@example.com" }
+      ]
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "per_page": 25,
+    "total_count": 1,
+    "total_pages": 1
   }
-]
+}
 ```
 
 The list is paginated with `page` and `per_page`. It defaults to 25 per page and caps
-`per_page` at 100. Missing or invalid values fall back to the defaults.
+`per_page` at 100. Missing or invalid values fall back to the defaults, and a page past
+the end returns an empty `courses` array with the real totals in `meta`.
 
 ```bash
-curl -i "http://localhost:3000/api/v1/courses?page=2&per_page=3"
-```
-
-The body is still a plain array. The counts come back in headers:
-
-```
-X-Total-Count: 7
-X-Page: 2
-X-Per-Page: 3
-X-Total-Pages: 3
+curl "http://localhost:3000/api/v1/courses?page=2&per_page=3"
 ```
 
 ### Errors
@@ -117,7 +117,7 @@ Both endpoints return errors in the same shape:
 bundle exec rspec
 ```
 
-32 examples covering the models and both endpoints: the success responses, the exact
+33 examples covering the models and both endpoints: the success responses, the exact
 fields returned, pagination edges, validation failures, and a check that a failed create
 leaves no course behind.
 
@@ -138,10 +138,12 @@ and columns like timestamps aren't exposed by accident. Moving to the JSON:API a
 a config change if a client needs that format.
 
 The list endpoint uses `includes(:tutors)` to avoid an N+1, and pagination keeps the
-payload bounded, since a constant query count still returns every row otherwise. The
-totals go in headers instead of a `data`/`meta` envelope so the response stays the array
-it already was. I wrote it by hand because limit and offset over an ordered scope is a few
-lines, and Kaminari or Pagy mostly add view helpers an API doesn't need.
+payload bounded, since a constant query count still returns every row otherwise. The page
+details go in the body under `meta`, which is what AMS's `json` adapter gives you, so the
+client reads the counts from the same JSON it already parses instead of from headers. The
+create response is left on the default adapter, so it still returns the course object on
+its own. Paging itself is limit and offset over an ordered scope, which is few enough
+lines that Kaminari or Pagy would mostly be adding view helpers an API doesn't need.
 
 Strong params use `params.expect`, and `ApplicationController` rescues `ParameterMissing`
 so a malformed payload gets a JSON `400` instead of an HTML error page.

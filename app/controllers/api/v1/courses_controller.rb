@@ -4,9 +4,12 @@ module Api
       include Paginated
 
       def index
-        courses = paginate(Course.includes(:tutors).order(:id))
+        courses = Course.includes(:tutors).order(:id)
 
-        render json: courses, status: :ok
+        render json: paginate(courses),
+               adapter: :json,
+               meta: pagination_meta(courses),
+               status: :ok
       end
 
       def create
